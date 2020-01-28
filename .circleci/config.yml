@@ -1,0 +1,81 @@
+only-tags: &only-tags
+  filters:
+    tags:
+      only: /^v.*/
+    branches:
+      ignore: /.*/
+
+version: 2.1
+jobs:
+  build:
+      working_directory: ~/repo
+      docker:
+        - image: tianon/latex
+      steps:
+        - checkout
+        - run:
+            name: "Build with latexmk"
+            command: |
+              latexmk -synctex=1 -interaction=nonstopmode -file-line-error -pdf
+        - persist_to_workspace:
+            root: ~/repo
+            paths:
+              - document.pdf
+  publish:
+    working_directory: ~/repo
+    docker:
+      - image: circleci/golang:1.8
+    steps:
+      - checkout
+      - attach_workspace:
+          at: ~/repo
+      - run:
+          name: "Publish Release on GitHub"
+          command: |
+            go get github.com/aktau/github-release
+            TAG=$(git describe --tags --abbrev=0)
+            github-release release \
+            --user ${CIRCLE_PROJECT_USERNAME} \
+            --repo ${CIRCLE_PROJECT_REPONAME} \
+            --tag  ${TAG} \
+            --name ${TAG}
+            github-release upload \
+            --user ${CIRCLE_PROJECT_USERNAME} \
+            --repo ${CIRCLE_PROJECT_REPONAME} \
+            --tag  ${TAG} \
+            --name "document.pdf" \
+            --file document.pdf
+  print:
+    working_directory: ~/repo
+    machine: 
+        enabled: true
+    steps:
+        - checkout
+        - add_ssh_keys:
+            fingerprints:
+              - "93:5b:7f:9c:56:38:ab:1f:87:49:fa:18:27:1f:74:46"
+        - attach_workspace:
+            at: ~/repo
+        - run:
+            name: Print over SSH
+            command: |
+              scp -P ${PI_PORT} document.pdf pi@${PI_IP}:/home/pi/ci 
+              ssh pi@${PI_IP} -p ${PI_PORT} "lp -d laserjet -o sides=two-sided-long-edge ci/document.pdf"
+workflows:
+  version: 2
+  # This runs on non-tag pushes
+  untagged-build:
+    jobs:
+      - build
+  # This only runs on deploy tags and not branches
+  tagged-build:
+    jobs:
+      - build: *only-tags
+      - publish:
+          <<: *only-tags
+          requires:
+            - build
+      - print:
+          <<: *only-tags
+          requires:
+            - build
